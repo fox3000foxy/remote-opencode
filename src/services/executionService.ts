@@ -14,6 +14,11 @@ import { SSEClient } from './sseClient.js';
 import { formatOutput, formatOutputForMobile, buildContextHeader } from '../utils/messageFormatter.js';
 import { processNextInQueue } from './queueManager.js';
 import type { QuestionRequest } from '../types/index.js';
+import {
+  buildQuestionText,
+  buildQuestionComponents,
+  setPendingAnswers
+} from '../handlers/buttonHandler.js';
 
 export async function runPrompt(
   channel: TextBasedChannel, 
@@ -113,7 +118,7 @@ export async function runPrompt(
   let hasSessionError = false;
   const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   
-  const updateStreamMessage = async (content: string, components: ActionRowBuilder<ButtonBuilder>[]): Promise<boolean> => {
+  const updateStreamMessage = async (content: string, components: ActionRowBuilder<any>[]): Promise<boolean> => {
     try {
       await streamMessage.edit({ content, components });
       return true;
@@ -278,30 +283,21 @@ export async function runPrompt(
 
       (async () => {
         try {
-          const question = request.questions?.[0];
-          const header = question?.header ? `**${question.header}**` : '**OpenCode needs input**';
-          const body = question?.question ?? 'OpenCode is waiting for a response.';
-          const optionButtons = (question?.options ?? []).slice(0, 4).map((option, index) =>
-            new ButtonBuilder()
-              .setCustomId(`qanswer:${threadId}:${request.id}:${index}`)
-              .setLabel((option.label ?? `Option ${index + 1}`).slice(0, 80))
-              .setStyle(index === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary)
-          );
-          const rejectButton = new ButtonBuilder()
-            .setCustomId(`qreject:${threadId}:${request.id}`)
-            .setLabel('Reject')
-            .setStyle(ButtonStyle.Danger);
-          const questionButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            ...optionButtons,
-            rejectButton,
-          );
+          const questions = request.questions ?? [];
+          if (questions.length === 0) return;
 
-          const edited = await updateStreamMessage(
-            `${contextHeader}\n📌 **Prompt**: ${prompt}\n\n⏸️ **Waiting for OpenCode input**\n${header}\n\n${body.slice(0, 1500)}`,
-            [questionButtons],
-          );
+          const answerKey = `${request.id}:${threadId}`;
+          const initialSelections = new Map<number, string[]>();
+          questions.forEach((_, i) => initialSelections.set(i, []));
+          setPendingAnswers(answerKey, initialSelections);
+
+          const questionText = buildQuestionText(questions, initialSelections);
+          const components = buildQuestionComponents(threadId, request, initialSelections, false);
+
+          const content = `${contextHeader}\n📌 **Prompt**: ${prompt}\n\n${questionText}`;
+          const edited = await updateStreamMessage(content, components);
           if (!edited) {
-            await safeSend(`⏸️ OpenCode is waiting for input: ${header}`);
+            await safeSend(`⏸️ OpenCode is waiting for input`);
           }
         } catch (error) {
           console.error('Error in onQuestionAsked:', error);
