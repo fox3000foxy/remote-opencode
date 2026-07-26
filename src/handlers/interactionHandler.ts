@@ -1,6 +1,6 @@
 import { Interaction, MessageFlags } from 'discord.js';
 import { commands } from '../commands/index.js';
-import { handleButton, handleSelectMenu } from './buttonHandler.js';
+import { handleButton, handleSelectMenu, handleModalSubmit } from './buttonHandler.js';
 import { isAuthorized } from '../services/configStore.js';
 
 export async function handleInteraction(interaction: Interaction) {
@@ -8,7 +8,7 @@ export async function handleInteraction(interaction: Interaction) {
     if (!isAuthorized(interaction.user.id)) {
       await interaction.reply({
         content: '🚫 You are not authorized to use this bot.',
-        flags: MessageFlags.Ephemeral
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -32,6 +32,22 @@ export async function handleInteraction(interaction: Interaction) {
       await handleSelectMenu(interaction);
     } catch (error) {
       console.error('Error handling select menu:', error);
+    }
+    return;
+  }
+
+  if (interaction.isModalSubmit()) {
+    if (!isAuthorized(interaction.user.id)) {
+      await interaction.reply({
+        content: '🚫 You are not authorized to use this bot.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    try {
+      await handleModalSubmit(interaction);
+    } catch (error) {
+      console.error('Error handling modal submit:', error);
     }
     return;
   }
@@ -60,7 +76,7 @@ export async function handleInteraction(interaction: Interaction) {
   if (!isAuthorized(interaction.user.id)) {
     await interaction.reply({
       content: '🚫 You are not authorized to use this bot.',
-      flags: MessageFlags.Ephemeral
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }

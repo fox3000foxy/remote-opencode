@@ -1,6 +1,7 @@
 import {
   ButtonInteraction,
   StringSelectMenuInteraction,
+  ModalSubmitInteraction,
   ThreadChannel,
   MessageFlags,
   ActionRowBuilder,
@@ -8,6 +9,9 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import type { QuestionItem, QuestionRequest } from '../types/index.js';
 import * as sessionManager from '../services/sessionManager.js';
@@ -23,6 +27,27 @@ export function setPendingAnswers(key: string, selections: Map<number, string[]>
 
 function clearPendingAnswers(key: string): void {
   pendingAnswers.delete(key);
+}
+
+function findRequestForSession(
+  questions: QuestionRequest[],
+  requestId: string,
+  sessionId: string,
+): QuestionRequest | undefined {
+  return questions.find((q) => q.id === requestId && q.sessionID === sessionId);
+}
+
+function getOrCreateSelections(
+  requestId: string,
+  threadId: string,
+): Map<number, string[]> {
+  const key = `${requestId}:${threadId}`;
+  let selections = pendingAnswers.get(key);
+  if (!selections) {
+    selections = new Map();
+    pendingAnswers.set(key, selections);
+  }
+  return selections;
 }
 
 export function buildQuestionText(
@@ -65,8 +90,18 @@ export function buildQuestionComponents(
     const selectedLabels = selections.get(qIdx) ?? [];
     const options = question.options ?? [];
     const isMulti = question.multiple === true;
+    const hasCustom = question.custom === true;
 
-    if (isMulti || options.length > 5) {
+    if (options.length === 0) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`qcustom:${threadId}:${request.id}:${qIdx}`)
+            .setLabel('✏️ Type answer')
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      );
+    } else if (isMulti || options.length > 5) {
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(`qselect:${threadId}:${request.id}:${qIdx}`)
         .setPlaceholder(
@@ -74,10 +109,10 @@ export function buildQuestionComponents(
             ? `Selected: ${selectedLabels.join(', ').slice(0, 100)}`
             : `Choose option(s) for Q${qIdx + 1}`,
         )
-        .setMinValues(0)
-        .setMaxValues(isMulti ? options.length : 1)
+        .setMinValues(isMulti ? 1 : 1)
+        .setMaxValues(Math.min(isMulti ? options.length : 1, 25))
         .addOptions(
-          options.map((opt, oIdx) => {
+          options.slice(0, 25).map((opt, oIdx) => {
             const optBuilder = new StringSelectMenuOptionBuilder()
               .setLabel(opt.label.slice(0, 100))
               .setValue(String(oIdx))
@@ -109,6 +144,15 @@ export function buildQuestionComponents(
           );
       });
 
+      if (hasCustom) {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`qcustom:${threadId}:${request.id}:${qIdx}`)
+            .setLabel('✏️ Custom')
+            .setStyle(ButtonStyle.Secondary),
+        );
+      }
+
       rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons));
     }
   }
@@ -116,13 +160,18 @@ export function buildQuestionComponents(
   if (rows.length >= maxRows) return rows;
 
   const hasMulti = request.questions.some((q) => q.multiple);
+  const allAnswered = request.questions.every(
+    (_, i) => (selections.get(i) ?? []).length > 0,
+  );
+
   if (hasMulti && showSubmit) {
     rows.push(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`qsubmit:${threadId}:${request.id}`)
           .setLabel('Submit Answers')
-          .setStyle(ButtonStyle.Success),
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(!allAnswered),
         new ButtonBuilder()
           .setCustomId(`qreject:${threadId}:${request.id}`)
           .setLabel('Reject')
@@ -185,6 +234,12 @@ export async function handleButton(interaction: ButtonInteraction) {
     return;
   }
 
+  if (customId.startsWith('qcustom:')) {
+    const [, threadId, requestId, questionIndexRaw] = customId.split(':');
+    await handleQuestionCustomButton(interaction, threadId, requestId, questionIndexRaw);
+    return;
+  }
+
   const [action, threadId] = customId.split('_');
 
   if (!threadId) {
@@ -233,74 +288,130 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
       return;
     }
 
+    await interaction.deferUpdate();
+
     try {
       const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
-      const request = questions.find((q) => q.id === requestId);
+      const request = findRequestForSession(questions, requestId, session.sessionId);
 
       if (!request) {
-        await interaction.reply({
-          content: '⚠️ Pending question not found. It may have already been answered.',
-          flags: MessageFlags.Ephemeral,
+        await interaction.editReply({
+          content: '⚠️ Pending question not found or belongs to another session.',
         });
         return;
       }
 
       const question = request.questions[questionIndex];
       if (!question) {
-        await interaction.reply({
+        await interaction.editReply({
           content: '⚠️ Question not found.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
-
-      const isMulti = question.multiple === true;
 
       const selectedLabels = interaction.values
         .map((v) => Number(v))
         .filter((idx) => Number.isInteger(idx) && question.options?.[idx])
         .map((idx) => question.options![idx].label);
 
-      const answerKey = `${requestId}:${threadId}`;
-      let selections = pendingAnswers.get(answerKey);
-      if (!selections) {
-        selections = new Map();
-        pendingAnswers.set(answerKey, selections);
-      }
+      const selections = getOrCreateSelections(requestId, threadId);
       selections.set(questionIndex, selectedLabels);
 
       const allAnswered = request.questions.every(
-        (_, i) => (selections!.get(i) ?? []).length > 0,
+        (_, i) => (selections.get(i) ?? []).length > 0,
       );
 
       if (allAnswered) {
-        await submitAllAnswers(interaction, session.port, request, selections, answerKey, threadId);
+        await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
       } else {
-        const maxRows = 5;
         const hasMulti = request.questions.some((q) => q.multiple);
         const showSubmit = hasMulti || request.questions.length > 1;
         const text = buildQuestionText(request.questions, selections);
         const components = buildQuestionComponents(threadId, request, selections, showSubmit);
 
-        const safeComponents = components.slice(0, maxRows);
+        const safeComponents = components.slice(0, 5);
 
-        await interaction.update({ content: text, components: safeComponents });
+        await interaction.editReply({ content: text, components: safeComponents });
         await interaction.followUp({
           content: `✅ Selected: ${selectedLabels.join(', ') || '(none)'}`,
           flags: MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
-      await interaction.followUp({
+      await interaction.editReply({
         content: `❌ Failed to process selection: ${(error as Error).message}`,
+      });
+    }
+  }
+}
+
+export async function handleModalSubmit(interaction: ModalSubmitInteraction) {
+  const customId = interaction.customId;
+
+  if (customId.startsWith('qcustomModal:')) {
+    const [, threadId, requestId, questionIndexRaw] = customId.split(':');
+    const questionIndex = Number(questionIndexRaw);
+
+    if (!threadId || !requestId || !Number.isInteger(questionIndex)) {
+      await interaction.reply({
+        content: '❌ Invalid custom answer.',
         flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const session = sessionManager.getSessionForThread(threadId);
+    if (!session) {
+      await interaction.reply({
+        content: '⚠️ Session not found.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    try {
+      const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+      const request = findRequestForSession(questions, requestId, session.sessionId);
+
+      if (!request) {
+        await interaction.editReply({
+          content: '⚠️ Pending question not found or belongs to another session.',
+        });
+        return;
+      }
+
+      const answer = interaction.fields.getTextInputValue('answer');
+
+      const selections = getOrCreateSelections(requestId, threadId);
+      selections.set(questionIndex, [answer]);
+
+      const allAnswered = request.questions.every(
+        (_, i) => (selections.get(i) ?? []).length > 0,
+      );
+
+      if (allAnswered) {
+        await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
+      } else {
+        const text = buildQuestionText(request.questions, selections);
+        const components = buildQuestionComponents(threadId, request, selections, false);
+        await interaction.editReply({ content: text, components: components.slice(0, 5) });
+        await interaction.followUp({
+          content: `✅ Q${questionIndex + 1} answered: ${answer.slice(0, 100)}`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    } catch (error) {
+      await interaction.editReply({
+        content: `❌ Failed to process custom answer: ${(error as Error).message}`,
       });
     }
   }
 }
 
 async function submitAllAnswers(
-  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  interaction: ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction,
   port: number,
   request: QuestionRequest,
   selections: Map<number, string[]>,
@@ -313,11 +424,54 @@ async function submitAllAnswers(
 
   const answeredText = buildQuestionTextAnswered(request.questions, selections);
   const answeredComponents = buildAnsweredComponents(threadId, request.id);
-  await interaction.update({ content: answeredText, components: answeredComponents });
+  await interaction.editReply({ content: answeredText, components: answeredComponents });
   await interaction.followUp({
     content: '✅ All questions answered.',
     flags: MessageFlags.Ephemeral,
   });
+}
+
+async function handleQuestionCustomButton(
+  interaction: ButtonInteraction,
+  threadId: string | undefined,
+  requestId: string | undefined,
+  questionIndexRaw: string | undefined,
+) {
+  const questionIndex = Number(questionIndexRaw);
+
+  if (!threadId || !requestId || !Number.isInteger(questionIndex)) {
+    await interaction.reply({
+      content: '❌ Invalid custom answer request.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const session = sessionManager.getSessionForThread(threadId);
+  if (!session) {
+    await interaction.reply({
+      content: '⚠️ Session not found.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`qcustomModal:${threadId}:${requestId}:${questionIndex}`)
+    .setTitle('Custom answer')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('answer')
+          .setLabel('Your answer')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Type your answer...')
+          .setRequired(true)
+          .setMaxLength(1500),
+      ),
+    );
+
+  await interaction.showModal(modal);
 }
 
 async function handleQuestionAnswer(
@@ -347,14 +501,15 @@ async function handleQuestionAnswer(
     return;
   }
 
+  await interaction.deferUpdate();
+
   try {
     const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
-    const request = questions.find((q) => q.id === requestId);
+    const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
-      await interaction.reply({
-        content: '⚠️ Pending question not found. It may have already been answered.',
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
+        content: '⚠️ Pending question not found or belongs to another session.',
       });
       return;
     }
@@ -363,30 +518,23 @@ async function handleQuestionAnswer(
     const option = question?.options?.[optionIndex];
 
     if (!option?.label) {
-      await interaction.reply({
-        content: '⚠️ Pending question/option not found. It may have already been answered.',
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
+        content: '⚠️ Option not found. It may have already been answered.',
       });
       return;
     }
 
-    const answerKey = `${requestId}:${threadId}`;
-    let selections = pendingAnswers.get(answerKey);
-    if (!selections) {
-      selections = new Map();
-      pendingAnswers.set(answerKey, selections);
-    }
-
+    const selections = getOrCreateSelections(requestId, threadId);
     selections.set(questionIndex, [option.label]);
 
-    const allAnswered = request.questions.every((_, i) => (selections!.get(i) ?? []).length > 0);
+    const allAnswered = request.questions.every((_, i) => (selections.get(i) ?? []).length > 0);
 
     if (allAnswered) {
-      await submitAllAnswers(interaction, session.port, request, selections, answerKey, threadId);
+      await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
     } else {
       const text = buildQuestionText(request.questions, selections);
       const components = buildQuestionComponents(threadId, request, selections, false);
-      await interaction.update({ content: text, components: components.slice(0, 5) });
+      await interaction.editReply({ content: text, components: components.slice(0, 5) });
       await interaction.followUp({
         content: `✅ Q${questionIndex + 1} answered: ${option.label}`,
         flags: MessageFlags.Ephemeral,
@@ -426,33 +574,28 @@ async function handleQuestionToggle(
     return;
   }
 
+  await interaction.deferUpdate();
+
   try {
     const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
-    const request = questions.find((q) => q.id === requestId);
+    const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
-      await interaction.reply({
-        content: '⚠️ Pending question not found.',
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
+        content: '⚠️ Pending question not found or belongs to another session.',
       });
       return;
     }
 
     const option = request.questions[questionIndex]?.options?.[optionIndex];
     if (!option?.label) {
-      await interaction.reply({
+      await interaction.editReply({
         content: '⚠️ Option not found.',
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    const answerKey = `${requestId}:${threadId}`;
-    let selections = pendingAnswers.get(answerKey);
-    if (!selections) {
-      selections = new Map();
-      pendingAnswers.set(answerKey, selections);
-    }
+    const selections = getOrCreateSelections(requestId, threadId);
 
     const current = selections.get(questionIndex) ?? [];
     if (current.includes(option.label)) {
@@ -463,7 +606,7 @@ async function handleQuestionToggle(
 
     const text = buildQuestionText(request.questions, selections);
     const components = buildQuestionComponents(threadId, request, selections, true);
-    await interaction.update({ content: text, components: components.slice(0, 5) });
+    await interaction.editReply({ content: text, components: components.slice(0, 5) });
     await interaction.followUp({
       content: `Toggled: ${option.label}`,
       flags: MessageFlags.Ephemeral,
@@ -497,22 +640,33 @@ async function handleQuestionSubmit(
     return;
   }
 
+  await interaction.deferUpdate();
+
   try {
     const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
-    const request = questions.find((q) => q.id === requestId);
+    const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
-      await interaction.reply({
-        content: '⚠️ Pending question not found.',
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
+        content: '⚠️ Pending question not found or belongs to another session.',
       });
       return;
     }
 
-    const answerKey = `${requestId}:${threadId}`;
-    const selections = pendingAnswers.get(answerKey) ?? new Map();
+    const selections = getOrCreateSelections(requestId, threadId);
 
-    await submitAllAnswers(interaction, session.port, request, selections, answerKey, threadId);
+    const allAnswered = request.questions.every(
+      (_, i) => (selections.get(i) ?? []).length > 0,
+    );
+
+    if (!allAnswered) {
+      await interaction.editReply({
+        content: '❌ Not all questions have an answer yet. Please answer all questions before submitting.',
+      });
+      return;
+    }
+
+    await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
   } catch (error) {
     await interaction.editReply({
       content: `❌ Failed to submit: ${(error as Error).message}`,
@@ -542,12 +696,14 @@ async function handleQuestionReject(
     return;
   }
 
+  await interaction.deferUpdate();
+
   try {
     await sessionManager.rejectQuestion(session.port, requestId);
     const answerKey = `${requestId}:${threadId}`;
     clearPendingAnswers(answerKey);
 
-    await interaction.update({
+    await interaction.editReply({
       content: '🚫 Question rejected.',
       components: buildAnsweredComponents(threadId, requestId),
     });
