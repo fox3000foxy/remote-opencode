@@ -35,6 +35,62 @@ function clearPendingAnswers(key: string): void {
   pendingPage.delete(key);
 }
 
+function countQuestionRows(question: QuestionItem): number {
+  const options = question.options ?? [];
+  const hasCustom = question.custom !== false;
+  if (options.length === 0) return 1;
+  const totalSlots = options.length + (hasCustom ? 1 : 0);
+  const useSelect = question.multiple === true || options.length > 5 || totalSlots > 5;
+  if (useSelect && hasCustom) return 2;
+  return 1;
+}
+
+function computePageSlice(
+  questions: QuestionItem[],
+  page: number,
+  questionRows: number,
+): { start: number; end: number; maxPage: number } {
+  let totalPages = 0;
+  {
+    let idx = 0;
+    while (idx < questions.length) {
+      let used = 0;
+      while (used < questionRows && idx < questions.length) {
+        const qRows = countQuestionRows(questions[idx]);
+        if (used + qRows > questionRows) break;
+        used += qRows;
+        idx++;
+      }
+      totalPages++;
+    }
+  }
+
+  const maxPage = Math.max(0, totalPages - 1);
+  const requestedPage = Math.max(0, Math.min(page, maxPage));
+
+  let start = 0;
+  for (let p = 0; p < requestedPage; p++) {
+    let used = 0;
+    while (used < questionRows && start < questions.length) {
+      const qRows = countQuestionRows(questions[start]);
+      if (used + qRows > questionRows) break;
+      used += qRows;
+      start++;
+    }
+  }
+
+  let end = start;
+  let used = 0;
+  while (used < questionRows && end < questions.length) {
+    const qRows = countQuestionRows(questions[end]);
+    if (used + qRows > questionRows) break;
+    used += qRows;
+    end++;
+  }
+
+  return { start, end, maxPage };
+}
+
 function findRequestForSession(
   questions: QuestionRequest[],
   requestId: string,
@@ -59,14 +115,18 @@ function getOrCreateSelections(
 export function buildQuestionText(
   questions: QuestionItem[],
   selections: Map<number, string[]>,
+  start: number = 0,
+  end?: number,
 ): string {
-  const parts = questions.map((q, i) => {
-    const labels = selections.get(i) ?? [];
+  const slice = end !== undefined ? questions.slice(start, end) : questions.slice(start);
+  const parts = slice.map((q, i) => {
+    const idx = start + i;
+    const labels = selections.get(idx) ?? [];
     const isAnswered = labels.length > 0;
     const status = isAnswered ? `✅ ${labels.join(', ')}` : '⬜ Pending';
     const header = q.header ? `**${q.header}**` : '';
     const body = q.question.slice(0, 200);
-    return `**Q${i + 1}:** ${header} (${status})\n${body}`;
+    return `**Q${idx + 1}:** ${header} (${status})\n${body}`;
   });
   return `⏸️ **Waiting for OpenCode input**\n\n${parts.join('\n\n')}`;
 }
@@ -92,20 +152,19 @@ export function buildQuestionComponents(
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
   const maxRows = 5;
   const questions = request.questions;
-  const totalQuestions = questions.length;
-  const questionsPerPage = maxRows - 1;
-  const maxPage = totalQuestions > questionsPerPage ? Math.ceil(totalQuestions / questionsPerPage) - 1 : 0;
+  const questionRows = maxRows - 1;
+  const { start, end, maxPage } = computePageSlice(questions, page, questionRows);
   const currentPage = Math.max(0, Math.min(page, maxPage));
-  const pageStart = currentPage * questionsPerPage;
-  const pageEnd = Math.min(pageStart + questionsPerPage, totalQuestions);
-  const key = `${request.id}:${threadId}`;
 
-  for (let qIdx = pageStart; qIdx < pageEnd && rows.length < maxRows - 1; qIdx++) {
+  for (let qIdx = start; qIdx < end && rows.length < questionRows; qIdx++) {
     const question = request.questions[qIdx];
     const selectedLabels = selections.get(qIdx) ?? [];
     const options = question.options ?? [];
     const isMulti = question.multiple === true;
-    const hasCustom = question.custom !== false;
+    let hasCustom = question.custom !== false;
+    if (!hasCustom && options.length > 25) {
+      hasCustom = true;
+    }
 
     if (options.length === 0) {
       rows.push(
@@ -390,8 +449,9 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
       } else {
         const hasMulti = request.questions.some((q) => q.multiple);
         const showSubmit = hasMulti || request.questions.length > 1;
-        const text = buildQuestionText(request.questions, selections);
         const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+        const { start: ts, end: te } = computePageSlice(request.questions, page, 4);
+        const text = buildQuestionText(request.questions, selections, ts, te);
         const components = buildQuestionComponents(threadId, request, selections, showSubmit, page);
 
         const safeComponents = components.slice(0, 5);
@@ -459,8 +519,9 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction) {
       if (allAnswered) {
         await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
       } else {
-        const text = buildQuestionText(request.questions, selections);
         const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+        const { start: ts, end: te } = computePageSlice(request.questions, page, 4);
+        const text = buildQuestionText(request.questions, selections, ts, te);
         const components = buildQuestionComponents(threadId, request, selections, false, page);
         await interaction.editReply({ content: text, components: components.slice(0, 5) });
         await interaction.followUp({
@@ -598,8 +659,9 @@ async function handleQuestionAnswer(
     if (allAnswered) {
       await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
     } else {
-      const text = buildQuestionText(request.questions, selections);
       const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+      const { start: ts, end: te } = computePageSlice(request.questions, page, 4);
+      const text = buildQuestionText(request.questions, selections, ts, te);
       const components = buildQuestionComponents(threadId, request, selections, false, page);
       await interaction.editReply({ content: text, components: components.slice(0, 5) });
       await interaction.followUp({
@@ -671,8 +733,9 @@ async function handleQuestionToggle(
       selections.set(questionIndex, [...current, option.label]);
     }
 
-    const text = buildQuestionText(request.questions, selections);
     const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+    const { start: ts, end: te } = computePageSlice(request.questions, page, 4);
+    const text = buildQuestionText(request.questions, selections, ts, te);
     const components = buildQuestionComponents(threadId, request, selections, true, page);
     await interaction.editReply({ content: text, components: components.slice(0, 5) });
     await interaction.followUp({
@@ -845,9 +908,10 @@ async function handleQuestionPage(
     pendingPage.set(key, newPage);
 
     const selections = getOrCreateSelections(requestId, threadId);
-    const text = buildQuestionText(request.questions, selections);
     const hasMulti = request.questions.some((q) => q.multiple);
     const showSubmit = hasMulti || request.questions.length > 1;
+    const { start: ts, end: te } = computePageSlice(request.questions, newPage, 4);
+    const text = buildQuestionText(request.questions, selections, ts, te);
     const components = buildQuestionComponents(threadId, request, selections, showSubmit, newPage);
 
     await interaction.editReply({ content: text, components: components.slice(0, 5) });

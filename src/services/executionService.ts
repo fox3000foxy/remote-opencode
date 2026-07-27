@@ -291,7 +291,7 @@ export async function runPrompt(
           questions.forEach((_, i) => initialSelections.set(i, []));
           setPendingAnswers(answerKey, initialSelections);
 
-          const questionText = buildQuestionText(questions, initialSelections);
+          const questionText = buildQuestionText(questions, initialSelections, 0, questions.length);
           const components = buildQuestionComponents(threadId, request, initialSelections, false, 0);
 
           const content = `${contextHeader}\n📌 **Prompt**: ${prompt}\n\n${questionText}`;

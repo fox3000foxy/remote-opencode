@@ -114,6 +114,13 @@ describe("handleButton question responses", () => {
       projectPath: "/repo",
       port: 14098,
     });
+    sessionManagerMock.listQuestions.mockResolvedValue([
+      {
+        id: "que_abc",
+        sessionID: "ses_123",
+        questions: [],
+      },
+    ]);
     sessionManagerMock.rejectQuestion.mockResolvedValue(true);
 
     const interaction = mockInteraction("qreject:thread123:que_abc");
