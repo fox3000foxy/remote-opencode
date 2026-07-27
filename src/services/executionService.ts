@@ -292,7 +292,7 @@ export async function runPrompt(
           setPendingAnswers(answerKey, initialSelections);
 
           const questionText = buildQuestionText(questions, initialSelections);
-          const components = buildQuestionComponents(threadId, request, initialSelections, false);
+          const components = buildQuestionComponents(threadId, request, initialSelections, false, 0);
 
           const content = `${contextHeader}\n📌 **Prompt**: ${prompt}\n\n${questionText}`;
           const edited = await updateStreamMessage(content, components);

@@ -20,13 +20,19 @@ import * as dataStore from '../services/dataStore.js';
 import * as worktreeManager from '../services/worktreeManager.js';
 
 const pendingAnswers = new Map<string, Map<number, string[]>>();
+const pendingPage = new Map<string, number>();
 
 export function setPendingAnswers(key: string, selections: Map<number, string[]>): void {
   pendingAnswers.set(key, selections);
 }
 
+export function setPendingPage(key: string, page: number): void {
+  pendingPage.set(key, page);
+}
+
 function clearPendingAnswers(key: string): void {
   pendingAnswers.delete(key);
+  pendingPage.delete(key);
 }
 
 function findRequestForSession(
@@ -81,16 +87,25 @@ export function buildQuestionComponents(
   request: QuestionRequest,
   selections: Map<number, string[]>,
   showSubmit: boolean,
+  page: number = 0,
 ): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
   const maxRows = 5;
+  const questions = request.questions;
+  const totalQuestions = questions.length;
+  const questionsPerPage = maxRows - 1;
+  const maxPage = totalQuestions > questionsPerPage ? Math.ceil(totalQuestions / questionsPerPage) - 1 : 0;
+  const currentPage = Math.max(0, Math.min(page, maxPage));
+  const pageStart = currentPage * questionsPerPage;
+  const pageEnd = Math.min(pageStart + questionsPerPage, totalQuestions);
+  const key = `${request.id}:${threadId}`;
 
-  for (let qIdx = 0; qIdx < request.questions.length && rows.length < maxRows; qIdx++) {
+  for (let qIdx = pageStart; qIdx < pageEnd && rows.length < maxRows - 1; qIdx++) {
     const question = request.questions[qIdx];
     const selectedLabels = selections.get(qIdx) ?? [];
     const options = question.options ?? [];
     const isMulti = question.multiple === true;
-    const hasCustom = question.custom === true;
+    const hasCustom = question.custom !== false;
 
     if (options.length === 0) {
       rows.push(
@@ -101,59 +116,75 @@ export function buildQuestionComponents(
             .setStyle(ButtonStyle.Secondary),
         ),
       );
-    } else if (isMulti || options.length > 5) {
-      const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId(`qselect:${threadId}:${request.id}:${qIdx}`)
-        .setPlaceholder(
-          selectedLabels.length > 0
-            ? `Selected: ${selectedLabels.join(', ').slice(0, 100)}`
-            : `Choose option(s) for Q${qIdx + 1}`,
-        )
-        .setMinValues(isMulti ? 1 : 1)
-        .setMaxValues(Math.min(isMulti ? options.length : 1, 25))
-        .addOptions(
-          options.slice(0, 25).map((opt, oIdx) => {
-            const optBuilder = new StringSelectMenuOptionBuilder()
-              .setLabel(opt.label.slice(0, 100))
-              .setValue(String(oIdx))
-              .setDefault(selectedLabels.includes(opt.label));
-            if (opt.description) {
-              optBuilder.setDescription(opt.description.slice(0, 100));
-            }
-            return optBuilder;
-          }),
-        );
-
-      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
     } else {
-      const buttons = options.map((opt, oIdx) => {
-        const isSelected = selectedLabels.includes(opt.label);
-        const customId = isMulti
-          ? `qtoggle:${threadId}:${request.id}:${qIdx}:${oIdx}`
-          : `qanswer:${threadId}:${request.id}:${qIdx}:${oIdx}`;
+      const totalSlots = options.length + (hasCustom ? 1 : 0);
+      const useSelect = isMulti || options.length > 5 || totalSlots > 5;
 
-        return new ButtonBuilder()
-          .setCustomId(customId)
-          .setLabel(opt.label.slice(0, 80))
-          .setStyle(
-            isSelected
-              ? isMulti
-                ? ButtonStyle.Success
-                : ButtonStyle.Primary
-              : ButtonStyle.Secondary,
+      if (useSelect) {
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId(`qselect:${threadId}:${request.id}:${qIdx}`)
+          .setPlaceholder(
+            selectedLabels.length > 0
+              ? `Selected: ${selectedLabels.join(', ').slice(0, 100)}`
+              : `Choose option(s) for Q${qIdx + 1}`,
+          )
+          .setMinValues(1)
+          .setMaxValues(Math.min(isMulti ? options.length : 1, 25))
+          .addOptions(
+            options.slice(0, 25).map((opt, oIdx) => {
+              const optBuilder = new StringSelectMenuOptionBuilder()
+                .setLabel(opt.label.slice(0, 100))
+                .setValue(String(oIdx))
+                .setDefault(selectedLabels.includes(opt.label));
+              if (opt.description) {
+                optBuilder.setDescription(opt.description.slice(0, 100));
+              }
+              return optBuilder;
+            }),
           );
-      });
 
-      if (hasCustom) {
-        buttons.push(
-          new ButtonBuilder()
-            .setCustomId(`qcustom:${threadId}:${request.id}:${qIdx}`)
-            .setLabel('✏️ Custom')
-            .setStyle(ButtonStyle.Secondary),
-        );
+        rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
+      } else {
+        const buttons = options.map((opt, oIdx) => {
+          const isSelected = selectedLabels.includes(opt.label);
+          const customId = isMulti
+            ? `qtoggle:${threadId}:${request.id}:${qIdx}:${oIdx}`
+            : `qanswer:${threadId}:${request.id}:${qIdx}:${oIdx}`;
+
+          return new ButtonBuilder()
+            .setCustomId(customId)
+            .setLabel(opt.label.slice(0, 80))
+            .setStyle(
+              isSelected
+                ? isMulti
+                  ? ButtonStyle.Success
+                  : ButtonStyle.Primary
+                : ButtonStyle.Secondary,
+            );
+        });
+
+        if (hasCustom) {
+          buttons.push(
+            new ButtonBuilder()
+              .setCustomId(`qcustom:${threadId}:${request.id}:${qIdx}`)
+              .setLabel('✏️ Custom')
+              .setStyle(ButtonStyle.Secondary),
+          );
+        }
+
+        rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons));
       }
 
-      rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons));
+      if (useSelect && hasCustom && rows.length < maxRows) {
+        rows.push(
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`qcustom:${threadId}:${request.id}:${qIdx}`)
+              .setLabel('✏️ Custom')
+              .setStyle(ButtonStyle.Secondary),
+          ),
+        );
+      }
     }
   }
 
@@ -164,30 +195,52 @@ export function buildQuestionComponents(
     (_, i) => (selections.get(i) ?? []).length > 0,
   );
 
+  const bottomButtons: ButtonBuilder[] = [];
+
   if (hasMulti && showSubmit) {
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`qsubmit:${threadId}:${request.id}`)
-          .setLabel('Submit Answers')
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(!allAnswered),
-        new ButtonBuilder()
-          .setCustomId(`qreject:${threadId}:${request.id}`)
-          .setLabel('Reject')
-          .setStyle(ButtonStyle.Danger),
-      ),
-    );
-  } else {
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`qreject:${threadId}:${request.id}`)
-          .setLabel('Reject')
-          .setStyle(ButtonStyle.Danger),
-      ),
+    bottomButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`qsubmit:${threadId}:${request.id}`)
+        .setLabel('Submit Answers')
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(!allAnswered),
     );
   }
+
+  if (maxPage > 0) {
+    if (currentPage > 0) {
+      bottomButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`qpage:${threadId}:${request.id}:${currentPage - 1}`)
+          .setLabel('◀ Prev')
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+    bottomButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`qpagelabel:${threadId}:${request.id}`)
+        .setLabel(`Page ${currentPage + 1}/${maxPage + 1}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+    );
+    if (currentPage < maxPage) {
+      bottomButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`qpage:${threadId}:${request.id}:${currentPage + 1}`)
+          .setLabel('Next ▶')
+          .setStyle(ButtonStyle.Secondary),
+      );
+    }
+  }
+
+  bottomButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`qreject:${threadId}:${request.id}`)
+      .setLabel('Reject')
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...bottomButtons));
 
   return rows;
 }
@@ -237,6 +290,17 @@ export async function handleButton(interaction: ButtonInteraction) {
   if (customId.startsWith('qcustom:')) {
     const [, threadId, requestId, questionIndexRaw] = customId.split(':');
     await handleQuestionCustomButton(interaction, threadId, requestId, questionIndexRaw);
+    return;
+  }
+
+  if (customId.startsWith('qpage:')) {
+    const [, threadId, requestId, pageRaw] = customId.split(':');
+    await handleQuestionPage(interaction, threadId, requestId, pageRaw);
+    return;
+  }
+
+  if (customId.startsWith('qpagelabel:')) {
+    await interaction.deferUpdate();
     return;
   }
 
@@ -327,7 +391,8 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
         const hasMulti = request.questions.some((q) => q.multiple);
         const showSubmit = hasMulti || request.questions.length > 1;
         const text = buildQuestionText(request.questions, selections);
-        const components = buildQuestionComponents(threadId, request, selections, showSubmit);
+        const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+        const components = buildQuestionComponents(threadId, request, selections, showSubmit, page);
 
         const safeComponents = components.slice(0, 5);
 
@@ -395,7 +460,8 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction) {
         await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
       } else {
         const text = buildQuestionText(request.questions, selections);
-        const components = buildQuestionComponents(threadId, request, selections, false);
+        const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+        const components = buildQuestionComponents(threadId, request, selections, false, page);
         await interaction.editReply({ content: text, components: components.slice(0, 5) });
         await interaction.followUp({
           content: `✅ Q${questionIndex + 1} answered: ${answer.slice(0, 100)}`,
@@ -533,7 +599,8 @@ async function handleQuestionAnswer(
       await submitAllAnswers(interaction, session.port, request, selections, `${requestId}:${threadId}`, threadId);
     } else {
       const text = buildQuestionText(request.questions, selections);
-      const components = buildQuestionComponents(threadId, request, selections, false);
+      const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+      const components = buildQuestionComponents(threadId, request, selections, false, page);
       await interaction.editReply({ content: text, components: components.slice(0, 5) });
       await interaction.followUp({
         content: `✅ Q${questionIndex + 1} answered: ${option.label}`,
@@ -605,7 +672,8 @@ async function handleQuestionToggle(
     }
 
     const text = buildQuestionText(request.questions, selections);
-    const components = buildQuestionComponents(threadId, request, selections, true);
+    const page = pendingPage.get(`${requestId}:${threadId}`) ?? 0;
+    const components = buildQuestionComponents(threadId, request, selections, true, page);
     await interaction.editReply({ content: text, components: components.slice(0, 5) });
     await interaction.followUp({
       content: `Toggled: ${option.label}`,
@@ -699,6 +767,16 @@ async function handleQuestionReject(
   await interaction.deferUpdate();
 
   try {
+    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const request = findRequestForSession(questions, requestId, session.sessionId);
+
+    if (!request) {
+      await interaction.editReply({
+        content: '⚠️ Pending question not found or belongs to another session.',
+      });
+      return;
+    }
+
     await sessionManager.rejectQuestion(session.port, requestId);
     const answerKey = `${requestId}:${threadId}`;
     clearPendingAnswers(answerKey);
@@ -714,6 +792,68 @@ async function handleQuestionReject(
   } catch (error) {
     await interaction.editReply({
       content: `❌ Failed to reject question: ${(error as Error).message}`,
+    });
+  }
+}
+
+async function handleQuestionPage(
+  interaction: ButtonInteraction,
+  threadId: string | undefined,
+  requestId: string | undefined,
+  pageRaw: string | undefined,
+) {
+  if (!threadId || !requestId || pageRaw === undefined) {
+    await interaction.reply({
+      content: '❌ Invalid page navigation.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const newPage = Number(pageRaw);
+  if (!Number.isInteger(newPage)) {
+    await interaction.reply({
+      content: '❌ Invalid page number.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const session = sessionManager.getSessionForThread(threadId);
+  if (!session) {
+    await interaction.reply({
+      content: '⚠️ Session not found.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  try {
+    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const request = findRequestForSession(questions, requestId, session.sessionId);
+
+    if (!request) {
+      await interaction.editReply({
+        content: '⚠️ Pending question not found or belongs to another session.',
+      });
+      return;
+    }
+
+    const key = `${requestId}:${threadId}`;
+    pendingPage.set(key, newPage);
+
+    const selections = getOrCreateSelections(requestId, threadId);
+    const text = buildQuestionText(request.questions, selections);
+    const hasMulti = request.questions.some((q) => q.multiple);
+    const showSubmit = hasMulti || request.questions.length > 1;
+    const components = buildQuestionComponents(threadId, request, selections, showSubmit, newPage);
+
+    await interaction.editReply({ content: text, components: components.slice(0, 5) });
+  } catch (error) {
+    await interaction.editReply({
+      content: `❌ Failed to change page: ${(error as Error).message}`,
     });
   }
 }
