@@ -95,12 +95,12 @@ describe("SessionManager", () => {
       const mockSessionId = "ses_abc123";
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ id: mockSessionId, slug: "test-session" }),
+        json: async () => ({ data: { id: mockSessionId } }),
       });
 
       const sessionId = await createSession(3000);
 
-      expect(mockFetch).toHaveBeenCalledWith("http://127.0.0.1:3000/session", {
+      expect(mockFetch).toHaveBeenCalledWith("http://127.0.0.1:3000/api/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
@@ -123,7 +123,7 @@ describe("SessionManager", () => {
     it("should throw error if response is missing id", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ slug: "test-session" }),
+        json: async () => ({ data: {} }),
       });
 
       await expect(createSession(3000)).rejects.toThrow(
@@ -142,13 +142,11 @@ describe("SessionManager", () => {
       await sendPrompt(3000, "ses_abc123", "Hello OpenCode");
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/session/ses_abc123/prompt_async",
+        "http://127.0.0.1:3000/api/session/ses_abc123/prompt",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            parts: [{ type: "text", text: "Hello OpenCode" }],
-          }),
+          body: JSON.stringify({ text: "Hello OpenCode" }),
         },
       );
     });
@@ -167,14 +165,11 @@ describe("SessionManager", () => {
       );
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/session/ses_abc123/prompt_async",
+        "http://127.0.0.1:3000/api/session/ses_abc123/prompt",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            parts: [{ type: "text", text: "Hello OpenCode" }],
-            model: { providerID: "llm-proxy", modelID: "ant_gemini-3-flash" },
-          }),
+          body: JSON.stringify({ text: "Hello OpenCode" }),
         },
       );
     });
@@ -195,18 +190,8 @@ describe("SessionManager", () => {
 
   describe("question helpers", () => {
     it("should list pending questions", async () => {
-      const questions = [{ id: "que_123", sessionID: "ses_123", questions: [] }];
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => questions,
-      });
-
-      await expect(listQuestions(3000)).resolves.toEqual(questions);
-
-      expect(mockFetch).toHaveBeenCalledWith("http://127.0.0.1:3000/question", {
-        method: "GET",
-        headers: {},
-      });
+      await expect(listQuestions(3000)).resolves.toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("should reply to a pending question", async () => {
@@ -217,11 +202,11 @@ describe("SessionManager", () => {
       ).resolves.toBe(true);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/question/que_123/reply",
+        "http://127.0.0.1:3000/permission/que_123/reply",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: [["Approve plan"]] }),
+          body: JSON.stringify({ reply: "accept", message: "Approve plan" }),
         },
       );
     });
@@ -232,10 +217,11 @@ describe("SessionManager", () => {
       await expect(rejectQuestion(3000, "que_123")).resolves.toBe(true);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/question/que_123/reject",
+        "http://127.0.0.1:3000/permission/que_123/reply",
         {
           method: "POST",
-          headers: {},
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reply: "reject" }),
         },
       );
     });

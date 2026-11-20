@@ -99,9 +99,10 @@ describe("handleButton question responses", () => {
     await handleButton(interaction);
 
     expect(interaction.deferUpdate).toHaveBeenCalled();
-    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_abc", [
-      ["Approve plan"],
-    ]);
+    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_abc",
+      [["Approve plan"]],
+      "/repo",
+    );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: "✅ All questions answered.",
       flags: 64,
@@ -127,7 +128,7 @@ describe("handleButton question responses", () => {
     await handleButton(interaction);
 
     expect(interaction.deferUpdate).toHaveBeenCalled();
-    expect(sessionManagerMock.rejectQuestion).toHaveBeenCalledWith(14098, "que_abc");
+    expect(sessionManagerMock.rejectQuestion).toHaveBeenCalledWith(14098, "que_abc", "/repo");
   });
 
   it("handles multi-question single-select: answers progressively, submits when done", async () => {
@@ -166,10 +167,10 @@ describe("handleButton question responses", () => {
 
     const q2Interaction = mockInteraction("qanswer:thread123:que_xyz:1:0");
     await handleButton(q2Interaction);
-    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_xyz", [
-      ["Vue"],
-      ["CSS"],
-    ]);
+    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_xyz",
+      [["Vue"], ["CSS"]],
+      "/repo",
+    );
   });
 
   it("handles multi-select toggle: toggle in, then submit", async () => {
@@ -208,9 +209,10 @@ describe("handleButton question responses", () => {
 
     const submit = mockInteraction("qsubmit:thread123:que_multi");
     await handleButton(submit);
-    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_multi", [
-      ["Cheese", "Mushrooms"],
-    ]);
+    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_multi",
+      [["Cheese", "Mushrooms"]],
+      "/repo",
+    );
   });
 
   it("handles select menu interaction for single-select", async () => {
@@ -241,9 +243,10 @@ describe("handleButton question responses", () => {
     await handleSelectMenu(interaction);
 
     expect(interaction.deferUpdate).toHaveBeenCalled();
-    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_select", [
-      ["Option B"],
-    ]);
+    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_select",
+      [["Option B"]],
+      "/repo",
+    );
   });
 
   it("handles select menu interaction for multi-select", async () => {
@@ -281,6 +284,7 @@ describe("handleButton question responses", () => {
       14098,
       "que_multi_select",
       [["Alpha", "Gamma"]],
+      "/repo",
     );
   });
 
@@ -370,9 +374,10 @@ describe("handleButton question responses", () => {
     await handleModalSubmit(interaction);
 
     expect(interaction.deferUpdate).toHaveBeenCalled();
-    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_custom", [
-      ["My custom answer"],
-    ]);
+    expect(sessionManagerMock.replyQuestion).toHaveBeenCalledWith(14098, "que_custom",
+      [["My custom answer"]],
+      "/repo",
+    );
   });
 
   it("handles custom answer button by showing a modal", async () => {

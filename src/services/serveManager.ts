@@ -97,7 +97,8 @@ function isPortAvailable(port: number): Promise<boolean> {
 
 async function isOrphanedServerRunning(port: number): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/session`, {
+    // OpenCode v2 exposes GET /global/health on serve instances
+    const response = await fetch(`http://127.0.0.1:${port}/global/health`, {
       headers: getAuthHeaders(),
       signal: AbortSignal.timeout(1000),
     });
@@ -140,7 +141,8 @@ async function findAvailablePort(): Promise<number> {
 
 async function isServerResponding(port: number): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/session`, {
+    // OpenCode v2 exposes GET /global/health on serve instances
+    const response = await fetch(`http://127.0.0.1:${port}/global/health`, {
       headers: getAuthHeaders(),
       signal: AbortSignal.timeout(2000),
     });
@@ -273,7 +275,8 @@ export async function waitForReady(
   model?: string,
 ): Promise<void> {
   const start = Date.now();
-  const url = `http://127.0.0.1:${port}/session`;
+  // OpenCode v2 exposes GET /global/health on serve instances
+  const url = `http://127.0.0.1:${port}/global/health`;
   const key = projectPath
     ? model
       ? `${projectPath}:${model}`

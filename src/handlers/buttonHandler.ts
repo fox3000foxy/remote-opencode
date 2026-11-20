@@ -414,7 +414,7 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
     await interaction.deferUpdate();
 
     try {
-      const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+      const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
       const request = findRequestForSession(questions, requestId, session.sessionId);
 
       if (!request) {
@@ -497,7 +497,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction) {
     await interaction.deferUpdate();
 
     try {
-      const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+      const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
       const request = findRequestForSession(questions, requestId, session.sessionId);
 
       if (!request) {
@@ -546,7 +546,7 @@ async function submitAllAnswers(
   threadId: string,
 ) {
   const answers = request.questions.map((_, i) => selections.get(i) ?? []);
-  await sessionManager.replyQuestion(port, request.id, answers);
+  await sessionManager.replyQuestion(port, request.id, answers, sessionManager.getSessionForThread(threadId)?.projectPath);
   clearPendingAnswers(answerKey);
 
   const answeredText = buildQuestionTextAnswered(request.questions, selections);
@@ -631,7 +631,7 @@ async function handleQuestionAnswer(
   await interaction.deferUpdate();
 
   try {
-    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
     const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
@@ -706,7 +706,7 @@ async function handleQuestionToggle(
   await interaction.deferUpdate();
 
   try {
-    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
     const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
@@ -774,7 +774,7 @@ async function handleQuestionSubmit(
   await interaction.deferUpdate();
 
   try {
-    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
     const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
@@ -830,7 +830,7 @@ async function handleQuestionReject(
   await interaction.deferUpdate();
 
   try {
-    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
     const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
@@ -840,7 +840,7 @@ async function handleQuestionReject(
       return;
     }
 
-    await sessionManager.rejectQuestion(session.port, requestId);
+    await sessionManager.rejectQuestion(session.port, requestId, session.projectPath);
     const answerKey = `${requestId}:${threadId}`;
     clearPendingAnswers(answerKey);
 
@@ -894,7 +894,7 @@ async function handleQuestionPage(
   await interaction.deferUpdate();
 
   try {
-    const questions = (await sessionManager.listQuestions(session.port)) as QuestionRequest[];
+    const questions = (await sessionManager.listQuestions(session.port, session.projectPath)) as QuestionRequest[];
     const request = findRequestForSession(questions, requestId, session.sessionId);
 
     if (!request) {
@@ -949,7 +949,7 @@ async function handleInterrupt(interaction: ButtonInteraction, threadId: string)
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const success = await sessionManager.abortSession(port, session.sessionId);
+  const success = await sessionManager.abortSession(port, session.sessionId, session.projectPath);
 
   if (success) {
     await interaction.editReply({ content: '⏸️ Interrupt request sent.' });
@@ -1011,7 +1011,7 @@ async function handleWorktreePR(interaction: ButtonInteraction, threadId: string
     );
 
     const prPrompt = `Create a pull request for the current branch. Include a clear title and description summarizing all changes.`;
-    await sessionManager.sendPrompt(port, sessionId, prPrompt, preferredModel);
+    await sessionManager.sendPrompt(port, sessionId, prPrompt, preferredModel, mapping.worktreePath);
 
     await interaction.editReply({ content: '🚀 PR creation started! Check the thread for progress.' });
   } catch (error) {

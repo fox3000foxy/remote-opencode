@@ -78,7 +78,7 @@ export const session: Command = {
         const port = await serveManager.spawnServe(projectPath);
         await serveManager.waitForReady(port, 30000, projectPath);
 
-        const activeSessions = await sessionManager.listSessions(port);
+        const activeSessions = await sessionManager.listSessions(port, projectPath);
         const persistedSessions = dataStore
           .getAllThreadSessions()
           .filter((s) => s.projectPath === projectPath || s.projectPath.startsWith(projectPath));
@@ -146,7 +146,7 @@ export const session: Command = {
         const port = await serveManager.spawnServe(projectPath);
         await serveManager.waitForReady(port, 30000, projectPath);
 
-        const activeSessions = await sessionManager.listSessions(port);
+        const activeSessions = await sessionManager.listSessions(port, projectPath);
         if (activeSessions.length === 0) {
           await interaction.editReply({
             content: '❌ No sessions available to attach.',
@@ -193,7 +193,7 @@ export const session: Command = {
           await i.deferUpdate();
 
           const sessionId = i.values[0];
-          const sessionInfo = await sessionManager.getSessionInfo(port, sessionId);
+          const sessionInfo = await sessionManager.getSessionInfo(port, sessionId, projectPath);
           if (!sessionInfo) {
             await i.editReply({
               content: '❌ Selected session is no longer available.',
@@ -300,7 +300,7 @@ export const session: Command = {
         const parentChannelId = getParentChannelId(interaction);
         const projectPath = dataStore.getChannelProjectPath(parentChannelId) ?? currentSession.projectPath;
         const port = currentSession.port;
-        const sessionInfo = await sessionManager.getSessionInfo(port, currentSession.sessionId);
+        const sessionInfo = await sessionManager.getSessionInfo(port, currentSession.sessionId, currentSession.projectPath);
         const isAlive = sessionInfo !== null;
         const title = sessionInfo?.title || 'untitled';
         const threadSession = dataStore.getThreadSession(threadId);

@@ -322,7 +322,7 @@ describe("serveManager", () => {
       await vi.runAllTimersAsync();
 
       await expect(promise).resolves.toBeUndefined();
-      expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:14097/session", {
+      expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:14097/global/health", {
         headers: {},
       });
       if (origPwd === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
@@ -422,7 +422,7 @@ describe("serveManager", () => {
         await expect(promise).resolves.toBeUndefined();
 
         const expected = `Basic ${Buffer.from("opencode:s3cret").toString("base64")}`;
-        expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:14097/session", {
+        expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:14097/global/health", {
           headers: { Authorization: expected },
         });
       });

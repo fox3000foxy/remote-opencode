@@ -54,7 +54,7 @@ describe("SSEClient", () => {
       client.connect("http://127.0.0.1:3000");
 
       expect(MockEventSource).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/event",
+        "http://127.0.0.1:3000/api/event",
         undefined,
       );
     });
@@ -287,7 +287,7 @@ describe("SSEClient", () => {
       });
     });
 
-    it("should not trigger callback when error property is missing", () => {
+    it("should trigger callback with UnknownError when error property is missing", () => {
       const callback = vi.fn();
       client.connect("http://127.0.0.1:3000");
       client.onSessionError(callback);
@@ -308,7 +308,11 @@ describe("SSEClient", () => {
 
       messageHandler(event);
 
-      expect(callback).not.toHaveBeenCalled();
+      // v2 session.error without an error payload still surfaces as UnknownError
+      expect(callback).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({ name: "UnknownError" }),
+      );
     });
 
     it("should not trigger callback for non-error events", () => {
@@ -446,7 +450,7 @@ describe("SSEClient", () => {
       client.connect("http://127.0.0.1:3000");
 
       expect(MockEventSource).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/event",
+        "http://127.0.0.1:3000/api/event",
         undefined,
       );
     });
@@ -457,7 +461,7 @@ describe("SSEClient", () => {
       client.connect("http://127.0.0.1:3000");
 
       expect(MockEventSource).toHaveBeenCalledWith(
-        "http://127.0.0.1:3000/event",
+        "http://127.0.0.1:3000/api/event",
         expect.objectContaining({ fetch: expect.any(Function) }),
       );
 
@@ -470,7 +474,7 @@ describe("SSEClient", () => {
         .fn()
         .mockResolvedValue({ ok: true } as Response);
       vi.stubGlobal("fetch", underlyingFetch);
-      await init.fetch("http://127.0.0.1:3000/event", { method: "GET" });
+      await init.fetch("http://127.0.0.1:3000/api/event", { method: "GET" });
       vi.unstubAllGlobals();
 
       const expected = `Basic ${Buffer.from("opencode:s3cret").toString("base64")}`;
@@ -494,7 +498,7 @@ describe("SSEClient", () => {
         .fn()
         .mockResolvedValue({ ok: true } as Response);
       vi.stubGlobal("fetch", underlyingFetch);
-      await init.fetch("http://127.0.0.1:3000/event", {});
+      await init.fetch("http://127.0.0.1:3000/api/event", {});
       vi.unstubAllGlobals();
 
       const expected = `Basic ${Buffer.from("alice:s3cret").toString("base64")}`;

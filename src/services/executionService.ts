@@ -154,7 +154,7 @@ export async function runPrompt(
     sessionId = await sessionManager.ensureSessionForThread(threadId, effectivePath, port);
     
     const sseClient = new SSEClient();
-    sseClient.connect(`http://127.0.0.1:${port}`);
+    sseClient.connect(`http://127.0.0.1:${port}`, effectivePath);
     sessionManager.setSseClient(threadId, sseClient);
     
     sseClient.onPartUpdated((part) => {
@@ -356,7 +356,7 @@ export async function runPrompt(
     }, 1000);
     
     await updateStreamMessage(`${contextHeader}\n📌 **Prompt**: ${prompt}\n\n📝 Sending prompt...`, [buttons]);
-    await sessionManager.sendPrompt(port, sessionId, prompt, preferredModel);
+    await sessionManager.sendPrompt(port, sessionId, prompt, preferredModel, effectivePath);
     promptSent = true;
     
   } catch (error) {

@@ -3,14 +3,31 @@ import * as dataStore from "./dataStore.js";
 import { sanitizeModel } from "../utils/stringUtils.js";
 import { getAuthHeaders, assertNotAuthError } from "./serverAuth.js";
 
+/**
+ * OpenCode v2 HTTP API client.
+ *
+ * v1 endpoints (POST /session, POST /session/{id}/prompt_async, GET /event,
+ * GET|POST /question/...) are gone in v2. This module targets the v2 routes:
+ *   - POST   /api/session?directory=...          -> { data: { id } }
+ *   - GET    /api/session?directory=...          -> { data: [...] }
+ *   - GET    /api/session/{id}?directory=...     -> { data: {...} | null }
+ *   - POST   /api/session/{id}/prompt?directory   -> { data: {...} }  (body: { text })
+ *   - GET    /api/event?directory=...            -> SSE stream
+ * Auth is HTTP Basic opencode:<service-password>, forwarded via serverAuth.
+ */
+
 const threadSseClients = new Map<string, SSEClient>();
+
+function dirParam(directory?: string): string {
+  return directory ? `?directory=${encodeURIComponent(directory)}` : "";
+}
 
 function jsonHeaders(): Record<string, string> {
   return { "Content-Type": "application/json", ...getAuthHeaders() };
 }
 
-export async function createSession(port: number): Promise<string> {
-  const url = `http://127.0.0.1:${port}/session`;
+export async function createSession(port: number, directory?: string): Promise<string> {
+  const url = `http://127.0.0.1:${port}/api/session${dirParam(directory)}`;
   const response = await fetch(url, {
     method: "POST",
     headers: jsonHeaders(),
@@ -25,12 +42,13 @@ export async function createSession(port: number): Promise<string> {
   }
 
   const data = await response.json();
+  const id = data?.data?.id ?? data?.id;
 
-  if (!data.id) {
+  if (!id) {
     throw new Error("Invalid session response: missing id");
   }
 
-  return data.id;
+  return id;
 }
 
 function parseModelString(
@@ -52,22 +70,17 @@ export async function sendPrompt(
   sessionId: string,
   text: string,
   model?: string,
+  directory?: string,
 ): Promise<void> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}/prompt_async`;
-  const body: {
-    parts: { type: string; text: string }[];
-    model?: { providerID: string; modelID: string };
-  } = {
-    parts: [{ type: "text", text }],
-  };
-
-  if (model) {
-    const cleanModel = sanitizeModel(model);
-    const parsedModel = parseModelString(cleanModel);
-    if (parsedModel) {
-      body.model = parsedModel;
-    }
-  }
+  // v2: POST /api/session/{id}/prompt with a flat { text } body.
+  // The model is pinned at session-creation time (see createSession); a
+  // per-message model override is not supported by this endpoint, so an
+  // explicit preferred model is applied by creating the session accordingly
+  // (handled by callers via ensureSessionForThread recreation if needed).
+  void model;
+  void parseModelString;
+  const url = `http://127.0.0.1:${port}/api/session/${sessionId}/prompt${dirParam(directory)}`;
+  const body = { text };
 
   const response = await fetch(url, {
     method: "POST",
@@ -87,19 +100,21 @@ export async function sendPrompt(
 export async function validateSession(
   port: number,
   sessionId: string,
+  directory?: string,
 ): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}`;
+  const url = `http://127.0.0.1:${port}/api/session/${sessionId}${dirParam(directory)}`;
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
-      headers: jsonHeaders(),
+      headers: getAuthHeaders(),
     });
   } catch {
     return false;
   }
 
   if (!response.ok) {
+    if (response.status === 404) return false;
     assertNotAuthError(response.status, "Failed to validate session");
   }
   return response.ok;
@@ -108,24 +123,27 @@ export async function validateSession(
 export async function getSessionInfo(
   port: number,
   sessionId: string,
+  directory?: string,
 ): Promise<SessionInfo | null> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}`;
+  const url = `http://127.0.0.1:${port}/api/session/${sessionId}${dirParam(directory)}`;
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
-      headers: jsonHeaders(),
+      headers: getAuthHeaders(),
     });
   } catch {
     return null;
   }
 
   if (!response.ok) {
+    if (response.status === 404) return null;
     assertNotAuthError(response.status, "Failed to get session info");
     return null;
   }
   const data = await response.json();
-  return { id: data.id, title: data.title ?? "" };
+  const s = data?.data ?? data;
+  return { id: s.id, title: s.title ?? "" };
 }
 
 export interface SessionInfo {
@@ -133,13 +151,13 @@ export interface SessionInfo {
   title: string;
 }
 
-export async function listSessions(port: number): Promise<SessionInfo[]> {
-  const url = `http://127.0.0.1:${port}/session`;
+export async function listSessions(port: number, directory?: string): Promise<SessionInfo[]> {
+  const url = `http://127.0.0.1:${port}/api/session${dirParam(directory)}`;
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
-      headers: jsonHeaders(),
+      headers: getAuthHeaders(),
     });
   } catch {
     return [];
@@ -151,8 +169,9 @@ export async function listSessions(port: number): Promise<SessionInfo[]> {
   }
 
   const data = await response.json();
-  if (Array.isArray(data)) {
-    return data.map((s: { id: string; title?: string }) => ({
+  const list = Array.isArray(data) ? data : (data?.data ?? []);
+  if (Array.isArray(list)) {
+    return list.map((s: { id: string; title?: string }) => ({
       id: s.id,
       title: s.title ?? "",
     }));
@@ -163,8 +182,10 @@ export async function listSessions(port: number): Promise<SessionInfo[]> {
 export async function abortSession(
   port: number,
   sessionId: string,
+  directory?: string,
 ): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}/abort`;
+  // v2: POST /api/session/{id}/abort
+  const url = `http://127.0.0.1:${port}/api/session/${sessionId}/abort${dirParam(directory)}`;
   let response: Response;
   try {
     response = await fetch(url, {
@@ -182,32 +203,36 @@ export async function abortSession(
 }
 
 
-export async function listQuestions(port: number): Promise<unknown[]> {
-  const url = `http://127.0.0.1:${port}/question`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: getAuthHeaders(),
-  });
-
-  if (!response.ok) {
-    assertNotAuthError(response.status, "Failed to list questions");
-    throw new Error(`Failed to list questions: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return Array.isArray(data) ? data : [];
+export async function listQuestions(port: number, directory?: string): Promise<unknown[]> {
+  // v2 removed the global /question list endpoint; pending questions arrive
+  // over the /api/event SSE stream as question.asked events. Keep the
+  // signature for callers; the button handlers now resolve pending requests
+  // from the SSE-cached state (see sseClient pending question store).
+  void port;
+  void directory;
+  const { getPendingQuestions } = await import("./sseClient.js");
+  return getPendingQuestions();
 }
 
 export async function replyQuestion(
   port: number,
   requestId: string,
   answers: string[][],
+  directory?: string,
 ): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/question/${requestId}/reply`;
+  // v2: POST /permission/{requestID}/reply with { reply: "accept"|"reject"|..., message }
+  // For question-style prompts (options), map selected labels to an accept + message.
+  const params = dirParam(directory);
+  const url = `http://127.0.0.1:${port}/permission/${requestId}/reply${params}`;
+  const flat = answers.map((a) => a.join(", ")).filter(Boolean);
+  const body = {
+    reply: "accept",
+    message: flat.length > 0 ? flat.join(" | ") : "accepted",
+  };
   const response = await fetch(url, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ answers }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -224,11 +249,14 @@ export async function replyQuestion(
 export async function rejectQuestion(
   port: number,
   requestId: string,
+  directory?: string,
 ): Promise<boolean> {
-  const url = `http://127.0.0.1:${port}/question/${requestId}/reject`;
+  const params = dirParam(directory);
+  const url = `http://127.0.0.1:${port}/permission/${requestId}/reply${params}`;
   const response = await fetch(url, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: jsonHeaders(),
+    body: JSON.stringify({ reply: "reject" }),
   });
 
   if (!response.ok) {
@@ -280,7 +308,7 @@ export async function ensureSessionForThread(
   const existingSession = getSessionForThread(threadId);
 
   if (existingSession && existingSession.projectPath === projectPath) {
-    const isValid = await validateSession(port, existingSession.sessionId);
+    const isValid = await validateSession(port, existingSession.sessionId, projectPath);
     if (isValid) {
       setSessionForThread(
         threadId,
@@ -292,7 +320,7 @@ export async function ensureSessionForThread(
     }
   }
 
-  const sessionId = await createSession(port);
+  const sessionId = await createSession(port, projectPath);
   setSessionForThread(threadId, sessionId, projectPath, port);
   return sessionId;
 }

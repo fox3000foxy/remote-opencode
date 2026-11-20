@@ -1,19 +1,17 @@
 /**
  * Upstream OpenCode server authentication support.
  *
- * Mirrors the behavior of `opencode serve` when the following environment
- * variables are set:
- *   - OPENCODE_SERVER_PASSWORD — enables HTTP Basic auth on the server
- *   - OPENCODE_SERVER_USERNAME — optional, defaults to "opencode"
+ * Each `opencode serve` instance spawned by this bot inherits this process's
+ * environment. When OPENCODE_SERVER_PASSWORD is set here, spawned servers
+ * require HTTP Basic auth (username defaults to "opencode") — and this module
+ * forwards the same credentials on every internal request (session HTTP
+ * calls, SSE /api/event stream, readiness checks) so they keep working.
  *
- * When neither is set, this module is a no-op and existing behavior is
- * preserved. We never introduce our own auth mechanism; we only forward the
- * upstream credentials to the local opencode server so internal requests
- * (session HTTP calls, SSE /event stream, readiness checks) continue to work.
+ * When it is not set, spawned servers accept unauthenticated localhost
+ * requests and this module is a no-op.
  *
- * This is optional hardening / compatibility for users who already rely on
- * upstream `OPENCODE_SERVER_PASSWORD`. It is not a replacement for the
- * Discord-side allowlist or other access controls.
+ * This is not a replacement for the Discord-side allowlist or other access
+ * controls.
  */
 
 const DEFAULT_USERNAME = "opencode";
